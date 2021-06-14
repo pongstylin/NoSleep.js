@@ -1,7 +1,7 @@
 const { webm, mp4 } = require("./media.js");
 
 // Detect iOS browsers < version 10
-const oldIOS =
+const oldIOS = () =>
   typeof navigator !== "undefined" &&
   parseFloat(
     (
@@ -17,11 +17,12 @@ const oldIOS =
   !window.MSStream;
 
 // Detect native Wake Lock API support
-const nativeWakeLock = "wakeLock" in navigator;
+const nativeWakeLock = () => "wakeLock" in navigator;
 
 class NoSleep {
   constructor() {
-    if (nativeWakeLock) {
+    this.enabled = false;
+    if (nativeWakeLock()) {
       this._wakeLock = null;
       const handleVisibilityChange = () => {
         if (this._wakeLock !== null && document.visibilityState === "visible") {
@@ -30,7 +31,7 @@ class NoSleep {
       };
       document.addEventListener("visibilitychange", handleVisibilityChange);
       document.addEventListener("fullscreenchange", handleVisibilityChange);
-    } else if (oldIOS) {
+    } else if (oldIOS()) {
       this.noSleepTimer = null;
     } else {
       // Set up no sleep video element
@@ -66,12 +67,17 @@ class NoSleep {
     element.appendChild(source);
   }
 
+  get isEnabled() {
+    return this.enabled;
+  }
+
   enable() {
-    if (nativeWakeLock) {
-      navigator.wakeLock
+    if (nativeWakeLock()) {
+      return navigator.wakeLock
         .request("screen")
         .then((wakeLock) => {
           this._wakeLock = wakeLock;
+          this.enabled = true;
           console.log("Wake Lock active.");
           this._wakeLock.addEventListener("release", () => {
             // ToDo: Potentially emit an event for the page to observe since
@@ -81,9 +87,11 @@ class NoSleep {
           });
         })
         .catch((err) => {
+          this.enabled = false;
           console.error(`${err.name}, ${err.message}`);
+          throw err;
         });
-    } else if (oldIOS) {
+    } else if (oldIOS()) {
       this.disable();
       console.warn(`
         NoSleep enabled for older iOS devices. This can interrupt
@@ -96,16 +104,29 @@ class NoSleep {
           window.setTimeout(window.stop, 0);
         }
       }, 15000);
+      this.enabled = true;
+      return Promise.resolve();
     } else {
-      this.noSleepVideo.play();
+      let playPromise = this.noSleepVideo.play();
+      return playPromise
+        .then((res) => {
+          this.enabled = true;
+          return res;
+        })
+        .catch((err) => {
+          this.enabled = false;
+          throw err;
+        });
     }
   }
 
   disable() {
-    if (nativeWakeLock) {
-      this._wakeLock.release();
+    if (nativeWakeLock()) {
+      if (this._wakeLock) {
+        this._wakeLock.release();
+      }
       this._wakeLock = null;
-    } else if (oldIOS) {
+    } else if (oldIOS()) {
       if (this.noSleepTimer) {
         console.warn(`
           NoSleep now disabled for older iOS devices.
@@ -116,6 +137,7 @@ class NoSleep {
     } else {
       this.noSleepVideo.pause();
     }
+    this.enabled = false;
   }
 }
 
